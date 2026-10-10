@@ -1,5 +1,5 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index 859719f..9841d56 100644
+index 859719f..ccf52c5 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -1293,7 +1293,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
@@ -7,7 +7,7 @@ index 859719f..9841d56 100644
  [[package]]
  name = "plannotator-tui"
 -version = "0.9.4"
-+version = "0.9.4-herdr.1"
++version = "0.9.4-herdr.2"
  dependencies = [
   "anyhow",
   "plannotator-tui-hosts",
@@ -16,7 +16,7 @@ index 859719f..9841d56 100644
  [[package]]
  name = "plannotator-tui-hosts"
 -version = "0.9.4"
-+version = "0.9.4-herdr.1"
++version = "0.9.4-herdr.2"
  dependencies = [
   "rusqlite",
   "serde_json",
@@ -25,12 +25,12 @@ index 859719f..9841d56 100644
  [[package]]
  name = "plannotator-tui-schema"
 -version = "0.9.4"
-+version = "0.9.4-herdr.1"
++version = "0.9.4-herdr.2"
  dependencies = [
   "jsonschema",
   "serde",
 diff --git a/Cargo.toml b/Cargo.toml
-index cb1e14f..3c2bb88 100644
+index cb1e14f..db3a795 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -3,7 +3,7 @@ resolver = "3"
@@ -38,12 +38,12 @@ index cb1e14f..3c2bb88 100644
  
  [workspace.package]
 -version = "0.9.4"
-+version = "0.9.4-herdr.1"
++version = "0.9.4-herdr.2"
  edition = "2024"
  rust-version = "1.96"
  license = "MIT"
 diff --git a/crates/plannotator-tui/Cargo.toml b/crates/plannotator-tui/Cargo.toml
-index f09f465..602188e 100644
+index f09f465..bf45f1d 100644
 --- a/crates/plannotator-tui/Cargo.toml
 +++ b/crates/plannotator-tui/Cargo.toml
 @@ -14,8 +14,8 @@ name = "plannotator-tui"
@@ -52,27 +52,30 @@ index f09f465..602188e 100644
  [dependencies]
 -plannotator-tui-schema = { path = "../plannotator-tui-schema", version = "0.9.4" }
 -plannotator-tui-hosts = { path = "../plannotator-tui-hosts", version = "0.9.4" }
-+plannotator-tui-schema = { path = "../plannotator-tui-schema", version = "0.9.4-herdr.1" }
-+plannotator-tui-hosts = { path = "../plannotator-tui-hosts", version = "0.9.4-herdr.1" }
++plannotator-tui-schema = { path = "../plannotator-tui-schema", version = "0.9.4-herdr.2" }
++plannotator-tui-hosts = { path = "../plannotator-tui-hosts", version = "0.9.4-herdr.2" }
  anyhow.workspace = true
  serde.workspace = true
  serde_json.workspace = true
 diff --git a/crates/plannotator-tui/src/agent_choices.rs b/crates/plannotator-tui/src/agent_choices.rs
 new file mode 100644
-index 0000000..5ef95d4
+index 0000000..32b1e92
 --- /dev/null
 +++ b/crates/plannotator-tui/src/agent_choices.rs
-@@ -0,0 +1,56 @@
-+//! Join live agents to their tab labels without restricting the invoking tab.
+@@ -0,0 +1,60 @@
++//! Join live agents to their tab labels within the invoking workspace, across all of its tabs.
 +use crate::delivery::AgentChoice;
 +use anyhow::{Context as _, Result};
 +use serde_json::Value;
 +
-+pub(crate) fn parse(agents: &Value, tabs: &Value) -> Result<Vec<AgentChoice>> {
++pub(crate) fn parse(agents: &Value, tabs: &Value, workspace: &str) -> Result<Vec<AgentChoice>> {
 +    let agents = agents.pointer("/result/agents").and_then(Value::as_array).context("missing agent list")?;
 +    let tabs = tabs.pointer("/result/tabs").and_then(Value::as_array).context("missing tab list")?;
 +    let mut choices = Vec::new();
 +    for agent in agents {
++        if agent.get("workspace_id").and_then(Value::as_str) != Some(workspace) {
++            continue;
++        }
 +        let (Some(pane), Some(kind), Some(tab_id)) = (
 +            agent.get("pane_id").and_then(Value::as_str),
 +            agent.get("agent").and_then(Value::as_str),
@@ -105,17 +108,18 @@ index 0000000..5ef95d4
 +    #[test]
 +    fn other_tabs_are_selectable_and_labels_disambiguate_agents() -> Result<()> {
 +        let agents = json!({"result":{"agents":[
-+            {"pane_id":"w1:p1","agent":"codex","tab_id":"w1:t1"},
-+            {"pane_id":"w1:p2","agent":"codex","name":"reviewer","tab_id":"w1:t2"},
-+            {"pane_id":"w2:p1","agent":"claude","tab_id":"w2:t1"}
++            {"workspace_id":"w1","pane_id":"w1:p1","agent":"codex","tab_id":"w1:t1"},
++            {"workspace_id":"w1","pane_id":"w1:p2","agent":"codex","name":"reviewer","tab_id":"w1:t2"},
++            {"workspace_id":"w2","pane_id":"w2:p1","agent":"claude","tab_id":"w2:t1"}
 +        ]}});
 +        let tabs = json!({"result":{"tabs":[{"tab_id":"w1:t1","label":"Frontend"},{"tab_id":"w1:t2","label":"Backend"}]}});
-+        let choices = parse(&agents, &tabs)?;
-+        assert_eq!(choices.len(), 3);
++        let choices = parse(&agents, &tabs, "w1")?;
++        assert_eq!(choices.len(), 2);
++        assert!(parse(&agents, &tabs, "unknown-workspace")?.is_empty());
 +        assert!(choices.iter().any(|c| c.label == "Backend · reviewer (w1:p2)"));
 +        assert!(choices.iter().any(|c| c.label == "Frontend · codex (w1:p1)"));
-+        assert!(choices.iter().any(|c| c.label == "w2:t1 · claude (w2:p1)"));
-+        assert!(parse(&json!({}), &tabs).is_err());
++        assert!(!choices.iter().any(|c| c.pane == "w2:p1"));
++        assert!(parse(&json!({}), &tabs, "w1").is_err());
 +        Ok(())
 +    }
 +}
@@ -254,10 +258,10 @@ index 0000000..0dccd6d
 +}
 diff --git a/crates/plannotator-tui/src/app/agents_tests.rs b/crates/plannotator-tui/src/app/agents_tests.rs
 new file mode 100644
-index 0000000..0d1b8ce
+index 0000000..5e4c711
 --- /dev/null
 +++ b/crates/plannotator-tui/src/app/agents_tests.rs
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,83 @@
 +#![cfg(unix)]
 +#![allow(clippy::expect_used, reason = "tests assert by panicking")]
 +use super::Mode;
@@ -285,7 +289,7 @@ index 0000000..0d1b8ce
 +"#;
 +    std::fs::write(&bin, script).expect("fake CLI");
 +    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).expect("executable");
-+    let agents = json!({"result":{"agents":[{"pane_id":"w1:p1","agent":"codex","tab_id":"w1:t1"},{"pane_id":"w1:p2","agent":"claude","tab_id":"w1:t2"}]}});
++    let agents = json!({"result":{"agents":[{"workspace_id":"w1","pane_id":"w1:p1","agent":"codex","tab_id":"w1:t1"},{"workspace_id":"w1","pane_id":"w1:p2","agent":"claude","tab_id":"w1:t2"},{"workspace_id":"w2","pane_id":"w2:p1","agent":"claude","tab_id":"w2:t1"}]}});
 +    std::fs::write(root.join("agents.json"), agents.to_string()).expect("agents");
 +    std::fs::write(root.join("tabs.json"), json!({"result":{"tabs":[{"tab_id":"w1:t1","label":"Frontend"},{"tab_id":"w1:t2","label":"Backend"}]}}).to_string()).expect("tabs");
 +    let mut delivery = HerdrAgent::new(bin, "w1:p1".into(), Some("codex".into()));
@@ -313,6 +317,9 @@ index 0000000..0d1b8ce
 +    let rows = draw(&mut app, 100, 20);
 +    assert!(rows.contains("[ ] Backend · claude (w1:p2)"));
 +    assert!(rows.contains("[ ] Frontend · codex (w1:p1)"));
++    assert!(!rows.contains("w2:p1"), "other workspaces are hidden");
++    app.delivery.select_agent(Some("w2:p1".into()));
++    assert!(!app.delivery.can_send(), "other workspaces cannot be selected");
 +    app.agents_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 +    assert_eq!(app.mode, Mode::Browse);
 +    assert_eq!(app.delivery.selected_pane(), Some("w1:p2"));
@@ -328,7 +335,7 @@ index 0000000..0d1b8ce
 +    assert!(!app.delivery.can_send(), "removed target is cleared");
 +    std::fs::write(
 +        root.join("agents.json"),
-+        json!({"result":{"agents":[{"pane_id":"w1:p1","agent":"codex","tab_id":"w1:t1"}]}}).to_string(),
++        json!({"result":{"agents":[{"workspace_id":"w1","pane_id":"w1:p1","agent":"codex","tab_id":"w1:t1"}]}}).to_string(),
 +    )
 +    .expect("single agent");
 +    app.delivery.refresh_agents(true).expect("single discovery");
@@ -591,19 +598,23 @@ index 49449f9..20d92d7 100644
      assert_eq!(rect.y, 0);
      assert_eq!(rect.right(), 80, "the button sits on the right edge");
 diff --git a/crates/plannotator-tui/src/cli.rs b/crates/plannotator-tui/src/cli.rs
-index e4c3e78..5b97b02 100644
+index e4c3e78..6580cbd 100644
 --- a/crates/plannotator-tui/src/cli.rs
 +++ b/crates/plannotator-tui/src/cli.rs
-@@ -63,6 +63,7 @@ pub(crate) fn delivery(interactive: bool) -> Box<dyn Delivery> {
+@@ -61,7 +61,10 @@ pub(crate) fn delivery(interactive: bool) -> Box<dyn Delivery> {
+     match env.delivery_target() {
+         Some(target) if env.in_herdr => {
              let agent = target.agent.or_else(|| env.agent_in_pane(&target.pane));
-             Box::new(HerdrAgent::new(env.bin, target.pane, agent))
+-            Box::new(HerdrAgent::new(env.bin, target.pane, agent))
++            Box::new(HerdrAgent::new(env.bin, target.pane, agent).in_workspace(env.workspace_id))
++        }
++        _ if env.in_herdr => {
++            Box::new(HerdrAgent::new(env.bin, String::new(), None).in_workspace(env.workspace_id))
          }
-+        _ if env.in_herdr => Box::new(HerdrAgent::new(env.bin, String::new(), None)),
          _ => Box::new(Clipboard),
      }
- }
 diff --git a/crates/plannotator-tui/src/delivery.rs b/crates/plannotator-tui/src/delivery.rs
-index 3ea5694..eef27bf 100644
+index 3ea5694..fa275e2 100644
 --- a/crates/plannotator-tui/src/delivery.rs
 +++ b/crates/plannotator-tui/src/delivery.rs
 @@ -35,7 +35,28 @@ impl From<std::io::Error> for DeliveryError {
@@ -635,18 +646,24 @@ index 3ea5694..eef27bf 100644
      /// Shown in the footer and on the button, e.g. `clipboard` or `claude in w1:p1`.
      fn describe(&self) -> String;
      /// True when the target is an agent that will act on the feedback.
-@@ -98,20 +119,70 @@ pub(crate) struct HerdrAgent {
+@@ -98,20 +119,95 @@ pub(crate) struct HerdrAgent {
      bin: PathBuf,
      pane: String,
      agent: Option<String>,
 +    choices: Vec<AgentChoice>,
++    workspace: Option<String>,
 +    selected: Option<String>,
  }
  
  impl HerdrAgent {
      pub(crate) fn new(bin: PathBuf, pane: String, agent: Option<String>) -> Self {
 -        Self { bin, pane, agent }
-+        Self { selected: Some(pane.clone()), bin, pane, agent, choices: Vec::new() }
++        Self { selected: Some(pane.clone()), bin, pane, agent, choices: Vec::new(), workspace: None }
++    }
++
++    pub(crate) fn in_workspace(mut self, workspace: Option<String>) -> Self {
++        self.workspace = workspace.filter(|id| !id.is_empty());
++        self
      }
  }
  
@@ -661,8 +678,27 @@ index 3ea5694..eef27bf 100644
 +            Ok(serde_json::from_slice(&output.stdout)?)
 +        };
 +        let agents = query(&["agent", "list"])?;
-+        let tabs = query(&["tab", "list"])?;
-+        self.choices = super::agent_choices::parse(&agents, &tabs)?;
++        // Resolve once from the invocation context, or the original target's live metadata.
++        // Keep this workspace fixed when the user selects another tab or UI focus changes.
++        let workspace = self
++            .workspace
++            .clone()
++            .or_else(|| {
++                agents
++                    .pointer("/result/agents")?
++                    .as_array()?
++                    .iter()
++                    .find(|agent| {
++                        agent.get("pane_id").and_then(serde_json::Value::as_str) == Some(self.pane.as_str())
++                    })?
++                    .get("workspace_id")?
++                    .as_str()
++                    .map(str::to_owned)
++            })
++            .ok_or_else(|| anyhow::anyhow!("current workspace is unavailable"))?;
++        self.workspace = Some(workspace.clone());
++        let tabs = query(&["tab", "list", "--workspace", &workspace])?;
++        self.choices = super::agent_choices::parse(&agents, &tabs, &workspace)?;
 +        self.selected = if initial {
 +            // With several candidates even the invoking agent requires explicit selection.
 +            (self.choices.len() == 1).then(|| self.choices.first().map(|c| c.pane.clone())).flatten()
@@ -707,7 +743,7 @@ index 3ea5694..eef27bf 100644
          match &self.agent {
              Some(agent) => format!("{agent} in {}", self.pane),
              None => self.pane.clone(),
-@@ -123,6 +194,9 @@ impl Delivery for HerdrAgent {
+@@ -123,6 +219,9 @@ impl Delivery for HerdrAgent {
      }
  
      fn deliver(&self, feedback: &str) -> Result<(), DeliveryError> {
@@ -717,6 +753,47 @@ index 3ea5694..eef27bf 100644
          let output = Command::new(&self.bin)
              .args(["agent", "prompt", &self.pane, feedback])
              .stdin(Stdio::null())
+diff --git a/crates/plannotator-tui/src/herdr/context.rs b/crates/plannotator-tui/src/herdr/context.rs
+index cfd70a5..5a0dc3d 100644
+--- a/crates/plannotator-tui/src/herdr/context.rs
++++ b/crates/plannotator-tui/src/herdr/context.rs
+@@ -36,6 +36,8 @@ pub(crate) struct HerdrEnv {
+     /// `HERDR_PANE_ID`: the pane this process runs in. Inside the app that is our own
+     /// pane; only the launcher may treat it as "the caller".
+     pub(crate) pane_id: Option<String>,
++    /// Workspace owning this review, retained independently of later UI focus.
++    pub(crate) workspace_id: Option<String>,
+     pub(crate) context: Option<HerdrContext>,
+     /// `PLANNOTATOR_TUI_FILE`, `PLANNOTATOR_TUI_DELIVER_TO`, `PLANNOTATOR_TUI_DELIVER_AGENT`,
+     /// `PLANNOTATOR_TUI_PLACEMENT`: set by the launcher or an agent.
+@@ -76,6 +78,10 @@ impl HerdrEnv {
+             in_herdr: env("HERDR_ENV").as_deref() == Some("1"),
+             bin: non_empty("HERDR_BIN_PATH").map_or_else(|| PathBuf::from("herdr"), PathBuf::from),
+             pane_id: non_empty("HERDR_PANE_ID"),
++            workspace_id: context
++                .as_ref()
++                .and_then(|context: &HerdrContext| context.workspace_id.clone())
++                .or_else(|| non_empty("HERDR_WORKSPACE_ID")),
+             context,
+             file: non_empty("PLANNOTATOR_TUI_FILE").map(PathBuf::from),
+             deliver_to: non_empty("PLANNOTATOR_TUI_DELIVER_TO"),
+@@ -245,6 +251,16 @@ mod tests {
+         assert_eq!(env(&[("HERDR_PLUGIN_CONTEXT_JSON", "{}")]).reviewed_pane(), None);
+     }
+ 
++    #[test]
++    fn workspace_scope_comes_from_the_invocation_or_the_pane_environment() {
++        let pane = env(&[("HERDR_WORKSPACE_ID", "w2")]);
++        assert_eq!(pane.workspace_id.as_deref(), Some("w2"));
++        let action =
++            env(&[("HERDR_WORKSPACE_ID", "w2"), ("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w1"}"#)]);
++        assert_eq!(action.workspace_id.as_deref(), Some("w1"));
++        assert_eq!(env(&[]).workspace_id, None);
++    }
++
+     #[test]
+     fn the_terminal_pane_and_line_count_come_from_the_launcher() {
+         let env =
 diff --git a/crates/plannotator-tui/src/main.rs b/crates/plannotator-tui/src/main.rs
 index b08126f..5d2c846 100644
 --- a/crates/plannotator-tui/src/main.rs

@@ -21,7 +21,7 @@ Annotate inside [Herdr](https://github.com/herdrdev/herdr): comment on any termi
 
 Both installs download a small prebuilt `herdr-annotate` binary and verify its SHA-256 checksum. The unchanged terminal-annotation runtime uses the upstream release assets.
 
-This fork ships a patched `plannotator-tui` for Full installs. It downloads verified binaries from this repository's `tui-v0.9.4-herdr.1` release. If that release is not available yet, macOS/Linux builds the pinned upstream source with this repository's patch; that fallback requires Rust 1.96+, git, curl, and a C compiler.
+This fork ships a patched `plannotator-tui` for Full installs. It downloads verified binaries from this repository's `tui-v0.9.4-herdr.2` release. If that release is not available yet, macOS/Linux builds the pinned upstream source with this repository's patch; that fallback requires Rust 1.96+, git, curl, and a C compiler.
 
 On Linux, install `wl-clipboard`, `xclip`, or `xsel` for clipboard access.
 
@@ -252,7 +252,7 @@ plannotator-tui. If neither is installed, Ctrl-click shows a notification saying
 > ([#69](https://github.com/plannotator/herdr-annotate/issues/69)). Install the Links add-on to keep
 > the old behavior.
 
-In Herdr, the upper-right **agent dropdown** (or `A`) lists live agents across all tabs and workspaces. Each entry starts with its tab name, followed by the agent name and pane ID. With multiple agents, none is checked by default. Use the mouse or `↑`/`↓` and `Enter`/`Space` to select a recipient; selecting the checked entry clears it. A single detected agent is selected automatically. The list refreshes when opened and before sending; a missing recipient or failed discovery clears the selection.
+In Herdr, the upper-right **agent dropdown** (or `A`) lists live agents across all tabs in the current workspace. Each entry starts with its tab name, followed by the agent name and pane ID. With multiple agents, none is checked by default. Use the mouse or `↑`/`↓` and `Enter`/`Space` to select a recipient; selecting the checked entry clears it. A single detected agent is selected automatically. The list refreshes when opened and before sending; a missing recipient or failed discovery clears the selection.
 
 Sending requires a selected agent. The Send button is dimmed until selection, and `E`, `R`, and `S` cannot send or close the review through a send action without a recipient. Annotations remain pending. Standalone use still copies feedback to the clipboard.
 
