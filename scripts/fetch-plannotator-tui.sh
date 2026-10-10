@@ -11,8 +11,8 @@
 #   2. PLANNOTATOR_TUI_BIN=/path/to/binary is set      -> copy it (local testing, no download)
 #   3. otherwise download the release asset for this platform and verify its sha256
 #
-# A failed download never fails the plugin install: the TypeScript tools keep working and the
-# review actions explain what to do. Only a bad PLANNOTATOR_TUI_BIN is an error.
+# Fork releases contain the patched TUI. Before a release exists, build the pinned source
+# with Rust 1.96+ and git. Failed verification never installs an unpatched review binary.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -47,7 +47,7 @@ case "$(uname -s)/$(uname -m)" in
 esac
 
 asset="plannotator-tui-$target"
-base="https://github.com/plannotator/plannotator-tui/releases/download/v$version"
+base="${PLANNOTATOR_TUI_RELEASE_BASE:-https://github.com/yinyajiang/herdr-annotate/releases/download/tui-v$version}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -62,8 +62,16 @@ fetch() {
 }
 
 echo "downloading $base/$asset"
-give_up() { echo "warning: $1 — the review pane is unavailable until the plugin is reinstalled" >&2; exit 0; }
-fetch "$base/$asset" "$tmp/$asset"       || give_up "download failed: $base/$asset"
+give_up() { echo "$1 — the review pane was not installed" >&2; exit 1; }
+source_build() {
+  if command -v cargo >/dev/null 2>&1 && command -v git >/dev/null 2>&1 && [ -f scripts/build-plannotator-tui.sh ]; then
+    echo "fork release unavailable; building the patched review runtime from pinned source"
+    bash scripts/build-plannotator-tui.sh
+    exit 0
+  fi
+  give_up "download failed; install Rust 1.96+ and git to build locally, or retry after the fork release is published"
+}
+fetch "$base/$asset" "$tmp/$asset"       || source_build
 fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS" || give_up "download failed: $base/SHA256SUMS"
 
 expected="$(grep " $asset\$" "$tmp/SHA256SUMS" | awk '{print $1}')"

@@ -19,7 +19,9 @@ Annotate inside [Herdr](https://github.com/herdrdev/herdr): comment on any termi
 - Herdr 0.8.0 or later
 - macOS, Linux, or Windows
 
-There is no runtime to install. Both installs download a small prebuilt `herdr-annotate` binary and verify its SHA-256 checksum.
+Both installs download a small prebuilt `herdr-annotate` binary and verify its SHA-256 checksum. The unchanged terminal-annotation runtime uses the upstream release assets.
+
+This fork ships a patched `plannotator-tui` for Full installs. It downloads verified binaries from this repository's `tui-v0.9.4-herdr.1` release. If that release is not available yet, macOS/Linux builds the pinned upstream source with this repository's patch; that fallback requires Rust 1.96+, git, curl, and a C compiler.
 
 On Linux, install `wl-clipboard`, `xclip`, or `xsel` for clipboard access.
 
@@ -35,7 +37,7 @@ Pick one. Installing another later just swaps it (same plugin id). An install st
 Wraps [Plannotator TUI](https://github.com/plannotator/plannotator-tui) (macOS and Linux; Windows via the windows-full variant below). [Demo](https://x.com/plannotator/status/2093419561077154287)
 
 ```sh
-herdr plugin install plannotator/herdr-annotate
+herdr plugin install yinyajiang/herdr-annotate
 ```
 
 <br clear="all">
@@ -45,7 +47,7 @@ herdr plugin install plannotator/herdr-annotate
 **Lite:** the simple version: select text, `prefix+a`, comment in a popover. [Demo](https://x.com/plannotator/status/2092757422322627008)
 
 ```sh
-herdr plugin install plannotator/herdr-annotate/lite
+herdr plugin install yinyajiang/herdr-annotate/lite
 ```
 
 <br clear="all">
@@ -53,7 +55,7 @@ herdr plugin install plannotator/herdr-annotate/lite
 **Windows Full (preview):** the Full install on Windows, opt-in. Requires Herdr 0.9.0 or later on Windows.
 
 ```sh
-herdr plugin install plannotator/herdr-annotate/windows-full
+herdr plugin install yinyajiang/herdr-annotate/windows-full
 ```
 
 It stages `plannotator-tui` natively, so no launcher sits between Herdr and the TUI. It shares the same native runtime as the Lite and Full installs, so annotations and archives stay in one place.
@@ -233,7 +235,7 @@ Herdr normally opens them. To send Ctrl-clicked `file://` Markdown links (`.md`,
 to Windows Full):
 
 ```sh
-herdr plugin install plannotator/herdr-annotate/links
+herdr plugin install yinyajiang/herdr-annotate/links
 ```
 
 To turn it off again:
@@ -250,12 +252,16 @@ plannotator-tui. If neither is installed, Ctrl-click shows a notification saying
 > ([#69](https://github.com/plannotator/herdr-annotate/issues/69)). Install the Links add-on to keep
 > the old behavior.
 
-**Send** (or `E`) makes the review the agent's next message. `q` closes. On an agent reply, `S`
+In Herdr, the upper-right **agent dropdown** (or `A`) lists live agents across all tabs and workspaces. Each entry starts with its tab name, followed by the agent name and pane ID. With multiple agents, none is checked by default. Use the mouse or `↑`/`↓` and `Enter`/`Space` to select a recipient; selecting the checked entry clears it. A single detected agent is selected automatically. The list refreshes when opened and before sending; a missing recipient or failed discovery clears the selection.
+
+Sending requires a selected agent. The Send button is dimmed until selection, and `E`, `R`, and `S` cannot send or close the review through a send action without a recipient. Annotations remain pending. Standalone use still copies feedback to the clipboard.
+
+**Send** (or `E`) makes the review the selected agent's next message. `q` closes. On an agent reply, `S`
 sends and closes in one key; `E` and `q` are unchanged.
 
 | Option | Where |
 |---|---|
-| Agents request reviews themselves | `npx skills add plannotator/herdr-annotate --skill plannotator-tui -g` |
+| Agents request reviews themselves | `npx skills add yinyajiang/herdr-annotate --skill plannotator-tui -g` |
 | Open as full tab, split, or popup | `[herdr] placement = "overlay" \| "split" \| "popup"` in `~/.config/plannotator-tui/config.toml` |
 | Use without Herdr | [plannotator-tui](https://github.com/plannotator/plannotator-tui) |
 
@@ -318,6 +324,8 @@ The Links add-on has no build step: `herdr plugin link "$PWD/links"` links it as
 `bash scripts/lite-regression.sh` checks the runtime against goldens recorded from the retired Bun
 runtime. [docs/lite-testing.md](docs/lite-testing.md) covers what it compares and everything else
 that guards Lite.
+
+To build this fork's review runtime, run `bash scripts/build-plannotator-tui.sh`. The patch in `patches/plannotator-tui-agent-selection.patch` is applied to upstream commit `59fa0af536260b54b4a6341ab306c9e6c93d9a55`, whose source archive is verified before building. For tests, prepare the source with `bash scripts/prepare-plannotator-tui.sh`, then run `cargo test --locked --workspace --manifest-path .build/plannotator-tui/Cargo.toml`.
 
 To test a local plannotator-tui build instead of the pinned release, put it in `bin/`
 before linking: `PLANNOTATOR_TUI_BIN=/path/to/plannotator-tui bash scripts/fetch-plannotator-tui.sh`.

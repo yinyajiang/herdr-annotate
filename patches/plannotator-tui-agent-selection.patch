@@ -1,0 +1,730 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 859719f..9841d56 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1293,7 +1293,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+ 
+ [[package]]
+ name = "plannotator-tui"
+-version = "0.9.4"
++version = "0.9.4-herdr.1"
+ dependencies = [
+  "anyhow",
+  "plannotator-tui-hosts",
+@@ -1313,7 +1313,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "plannotator-tui-hosts"
+-version = "0.9.4"
++version = "0.9.4-herdr.1"
+ dependencies = [
+  "rusqlite",
+  "serde_json",
+@@ -1321,7 +1321,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "plannotator-tui-schema"
+-version = "0.9.4"
++version = "0.9.4-herdr.1"
+ dependencies = [
+  "jsonschema",
+  "serde",
+diff --git a/Cargo.toml b/Cargo.toml
+index cb1e14f..3c2bb88 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -3,7 +3,7 @@ resolver = "3"
+ members = ["crates/plannotator-tui-schema", "crates/plannotator-tui-hosts", "crates/plannotator-tui"]
+ 
+ [workspace.package]
+-version = "0.9.4"
++version = "0.9.4-herdr.1"
+ edition = "2024"
+ rust-version = "1.96"
+ license = "MIT"
+diff --git a/crates/plannotator-tui/Cargo.toml b/crates/plannotator-tui/Cargo.toml
+index f09f465..602188e 100644
+--- a/crates/plannotator-tui/Cargo.toml
++++ b/crates/plannotator-tui/Cargo.toml
+@@ -14,8 +14,8 @@ name = "plannotator-tui"
+ path = "src/main.rs"
+ 
+ [dependencies]
+-plannotator-tui-schema = { path = "../plannotator-tui-schema", version = "0.9.4" }
+-plannotator-tui-hosts = { path = "../plannotator-tui-hosts", version = "0.9.4" }
++plannotator-tui-schema = { path = "../plannotator-tui-schema", version = "0.9.4-herdr.1" }
++plannotator-tui-hosts = { path = "../plannotator-tui-hosts", version = "0.9.4-herdr.1" }
+ anyhow.workspace = true
+ serde.workspace = true
+ serde_json.workspace = true
+diff --git a/crates/plannotator-tui/src/agent_choices.rs b/crates/plannotator-tui/src/agent_choices.rs
+new file mode 100644
+index 0000000..5ef95d4
+--- /dev/null
++++ b/crates/plannotator-tui/src/agent_choices.rs
+@@ -0,0 +1,56 @@
++//! Join live agents to their tab labels without restricting the invoking tab.
++use crate::delivery::AgentChoice;
++use anyhow::{Context as _, Result};
++use serde_json::Value;
++
++pub(crate) fn parse(agents: &Value, tabs: &Value) -> Result<Vec<AgentChoice>> {
++    let agents = agents.pointer("/result/agents").and_then(Value::as_array).context("missing agent list")?;
++    let tabs = tabs.pointer("/result/tabs").and_then(Value::as_array).context("missing tab list")?;
++    let mut choices = Vec::new();
++    for agent in agents {
++        let (Some(pane), Some(kind), Some(tab_id)) = (
++            agent.get("pane_id").and_then(Value::as_str),
++            agent.get("agent").and_then(Value::as_str),
++            agent.get("tab_id").and_then(Value::as_str),
++        ) else {
++            continue;
++        };
++        let tab = tabs.iter().find(|tab| tab.get("tab_id").and_then(Value::as_str) == Some(tab_id));
++        let label = tab
++            .and_then(|tab| tab.get("label"))
++            .and_then(Value::as_str)
++            .filter(|s| !s.is_empty())
++            .unwrap_or(tab_id);
++        let name = agent.get("name").and_then(Value::as_str).unwrap_or(kind);
++        choices.push(AgentChoice {
++            pane: pane.to_owned(),
++            agent: kind.to_owned(),
++            label: format!("{label} · {name} ({pane})"),
++        });
++    }
++    choices.sort_by(|a, b| a.label.cmp(&b.label));
++    choices.dedup_by(|a, b| a.pane == b.pane);
++    Ok(choices)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use serde_json::json;
++    #[test]
++    fn other_tabs_are_selectable_and_labels_disambiguate_agents() -> Result<()> {
++        let agents = json!({"result":{"agents":[
++            {"pane_id":"w1:p1","agent":"codex","tab_id":"w1:t1"},
++            {"pane_id":"w1:p2","agent":"codex","name":"reviewer","tab_id":"w1:t2"},
++            {"pane_id":"w2:p1","agent":"claude","tab_id":"w2:t1"}
++        ]}});
++        let tabs = json!({"result":{"tabs":[{"tab_id":"w1:t1","label":"Frontend"},{"tab_id":"w1:t2","label":"Backend"}]}});
++        let choices = parse(&agents, &tabs)?;
++        assert_eq!(choices.len(), 3);
++        assert!(choices.iter().any(|c| c.label == "Backend · reviewer (w1:p2)"));
++        assert!(choices.iter().any(|c| c.label == "Frontend · codex (w1:p1)"));
++        assert!(choices.iter().any(|c| c.label == "w2:t1 · claude (w2:p1)"));
++        assert!(parse(&json!({}), &tabs).is_err());
++        Ok(())
++    }
++}
+diff --git a/crates/plannotator-tui/src/app/agents.rs b/crates/plannotator-tui/src/app/agents.rs
+new file mode 100644
+index 0000000..0dccd6d
+--- /dev/null
++++ b/crates/plannotator-tui/src/app/agents.rs
+@@ -0,0 +1,127 @@
++//! Explicit recipient selection. Refresh on every open and retain only live selections.
++use super::{App, Mode};
++use crate::theme::palette;
++use ratatui::Frame;
++use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
++use ratatui::layout::Rect;
++use ratatui::style::{Color, Style};
++use ratatui::text::{Line, Span};
++use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
++use unicode_width::UnicodeWidthStr as _;
++
++impl App {
++    pub(super) fn open_agents(&mut self) {
++        if let Err(err) = self.delivery.refresh_agents(false) {
++            self.status = Some(format!("cannot list agents: {err:#}"));
++        }
++        self.agents_cursor = self
++            .delivery
++            .agent_choices()
++            .and_then(|choices| {
++                choices.iter().position(|c| Some(c.pane.as_str()) == self.delivery.selected_pane())
++            })
++            .unwrap_or(0);
++        self.mode = Mode::Agents;
++    }
++
++    fn choose_agent(&mut self, index: usize) {
++        let pane =
++            self.delivery.agent_choices().and_then(|choices| choices.get(index)).map(|c| c.pane.clone());
++        if let Some(pane) = pane {
++            let selected =
++                if self.delivery.selected_pane() == Some(pane.as_str()) { None } else { Some(pane) };
++            self.delivery.select_agent(selected);
++            self.derive_send_state();
++            self.status = Some(if self.delivery.can_send() {
++                format!("send to {}", self.delivery.describe())
++            } else {
++                "select an agent before sending".into()
++            });
++            self.mode = Mode::Browse;
++        }
++    }
++
++    pub(super) fn agents_key(&mut self, key: KeyEvent) {
++        let last = self.delivery.agent_choices().map_or(0, |choices| choices.len().saturating_sub(1));
++        match key.code {
++            KeyCode::Down | KeyCode::Char('j') => self.agents_cursor = (self.agents_cursor + 1).min(last),
++            KeyCode::Up | KeyCode::Char('k') => self.agents_cursor = self.agents_cursor.saturating_sub(1),
++            KeyCode::Enter | KeyCode::Char(' ') => self.choose_agent(self.agents_cursor),
++            KeyCode::Esc | KeyCode::Char('A') => self.mode = Mode::Browse,
++            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => self.mode = Mode::Browse,
++            _ => {}
++        }
++    }
++
++    pub(super) fn agents_mouse(&mut self, mouse: MouseEvent) {
++        match mouse.kind {
++            MouseEventKind::ScrollDown => self.agents_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
++            MouseEventKind::ScrollUp => self.agents_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
++            MouseEventKind::Down(MouseButton::Left) => {
++                let inside = |r: Rect| {
++                    mouse.column >= r.x
++                        && mouse.column < r.right()
++                        && mouse.row >= r.y
++                        && mouse.row < r.bottom()
++                };
++                if let Some(index) =
++                    self.geometry.agents_rows.iter().find(|(r, _)| inside(*r)).map(|(_, i)| *i)
++                {
++                    self.choose_agent(index);
++                } else if !self.geometry.agents_menu.is_some_and(inside) {
++                    self.mode = Mode::Browse;
++                }
++            }
++            _ => {}
++        }
++    }
++
++    pub(super) fn draw_agents(&mut self, frame: &mut Frame) {
++        let area = frame.area();
++        let choices = self.delivery.agent_choices().unwrap_or(&[]);
++        let width =
++            (choices.iter().map(|c| c.label.width() + 8).max().unwrap_or(32) as u16).max(48).min(area.width);
++        let height = (choices.len().max(1) as u16 + 2).min(area.height);
++        let button = self.geometry.agents_button;
++        let rect = Rect {
++            x: button.map_or(area.right(), Rect::right).saturating_sub(width).max(area.x),
++            y: button.map_or(area.y, Rect::bottom).min(area.bottom().saturating_sub(height)),
++            width,
++            height,
++        };
++        frame.render_widget(Clear, rect);
++        let block = Block::default()
++            .borders(Borders::ALL)
++            .border_type(BorderType::Rounded)
++            .border_style(Style::new().fg(Color::Cyan))
++            .title(" choose agent ")
++            .title_bottom(" ↑↓ move · enter/space select · esc close ");
++        let inner = block.inner(rect);
++        frame.render_widget(block, rect);
++        self.geometry.agents_menu = Some(rect);
++        let visible = usize::from(inner.height);
++        let start = self.agents_cursor.saturating_sub(visible.saturating_sub(1));
++        let lines: Vec<Line<'static>> = choices
++            .iter()
++            .enumerate()
++            .skip(start)
++            .take(visible)
++            .map(|(index, choice)| {
++                let y = inner.y + (index - start) as u16;
++                self.geometry.agents_rows.push((Rect { y, height: 1, ..inner }, index));
++                let check =
++                    if self.delivery.selected_pane() == Some(choice.pane.as_str()) { "x" } else { " " };
++                let style = if index == self.agents_cursor { palette().selection } else { Style::new() };
++                Line::from(Span::styled(format!(" [{check}] {}", choice.label), style))
++            })
++            .collect();
++        frame.render_widget(
++            Paragraph::new(if choices.is_empty() {
++                vec![Line::from(" No live agents available")]
++            } else {
++                lines
++            }),
++            inner,
++        );
++    }
++}
+diff --git a/crates/plannotator-tui/src/app/agents_tests.rs b/crates/plannotator-tui/src/app/agents_tests.rs
+new file mode 100644
+index 0000000..0d1b8ce
+--- /dev/null
++++ b/crates/plannotator-tui/src/app/agents_tests.rs
+@@ -0,0 +1,80 @@
++#![cfg(unix)]
++#![allow(clippy::expect_used, reason = "tests assert by panicking")]
++use super::Mode;
++use super::review_test_support::{draw, file_app, press};
++use crate::delivery::{Delivery, HerdrAgent};
++use plannotator_tui_schema::Kind;
++use ratatui::crossterm::event::{
++    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
++};
++use serde_json::json;
++use std::os::unix::fs::PermissionsExt as _;
++
++#[test]
++fn multiple_agents_require_selection_for_mouse_send_resend_and_send_quit() {
++    let (root, mut app, _) = file_app("agent-selection");
++    let bin = root.join("herdr-fake");
++    let script = r#"#!/usr/bin/env sh
++cd "$(dirname "$0")" || exit 1
++case "$1 $2" in
++  'agent list') cat agents.json ;;
++  'tab list') cat tabs.json ;;
++  'agent prompt') printf '%s\n' "$3" >> prompts ;;
++  *) exit 1 ;;
++esac
++"#;
++    std::fs::write(&bin, script).expect("fake CLI");
++    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).expect("executable");
++    let agents = json!({"result":{"agents":[{"pane_id":"w1:p1","agent":"codex","tab_id":"w1:t1"},{"pane_id":"w1:p2","agent":"claude","tab_id":"w1:t2"}]}});
++    std::fs::write(root.join("agents.json"), agents.to_string()).expect("agents");
++    std::fs::write(root.join("tabs.json"), json!({"result":{"tabs":[{"tab_id":"w1:t1","label":"Frontend"},{"tab_id":"w1:t2","label":"Backend"}]}}).to_string()).expect("tabs");
++    let mut delivery = HerdrAgent::new(bin, "w1:p1".into(), Some("codex".into()));
++    delivery.refresh_agents(true).expect("discovery");
++    assert!(!delivery.can_send(), "invoking agent is not preselected");
++    app.delivery = Box::new(delivery);
++    app.add_quote_annotation("one", Kind::Comment, "feedback".into()).expect("note");
++    for key in ['E', 'R'] {
++        press(&mut app, key);
++    }
++    app.send_and_quit().expect("S path");
++    assert!(!app.quit);
++    draw(&mut app, 100, 20);
++    let rect = app.geometry.send_button.expect("button");
++    app.handle_event(&Event::Mouse(MouseEvent {
++        kind: MouseEventKind::Down(MouseButton::Left),
++        column: rect.x,
++        row: rect.y,
++        modifiers: KeyModifiers::NONE,
++    }))
++    .expect("click");
++    assert!(!root.join("prompts").exists());
++    assert_eq!(app.send_count(), 1, "feedback remains pending");
++    app.open_agents();
++    let rows = draw(&mut app, 100, 20);
++    assert!(rows.contains("[ ] Backend · claude (w1:p2)"));
++    assert!(rows.contains("[ ] Frontend · codex (w1:p1)"));
++    app.agents_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
++    assert_eq!(app.mode, Mode::Browse);
++    assert_eq!(app.delivery.selected_pane(), Some("w1:p2"));
++    press(&mut app, 'E');
++    assert_eq!(std::fs::read_to_string(root.join("prompts")).expect("send"), "w1:p2\n");
++    assert_eq!(app.send_count(), 0);
++    app.open_agents();
++    app.agents_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
++    assert!(!app.delivery.can_send(), "clicking checked agent deselects it");
++    app.delivery.select_agent(Some("w1:p2".into()));
++    std::fs::write(root.join("agents.json"), "{\"result\":{\"agents\":[]}}").expect("agents exited");
++    app.open_agents();
++    assert!(!app.delivery.can_send(), "removed target is cleared");
++    std::fs::write(
++        root.join("agents.json"),
++        json!({"result":{"agents":[{"pane_id":"w1:p1","agent":"codex","tab_id":"w1:t1"}]}}).to_string(),
++    )
++    .expect("single agent");
++    app.delivery.refresh_agents(true).expect("single discovery");
++    assert_eq!(app.delivery.selected_pane(), Some("w1:p1"));
++    std::fs::write(root.join("agents.json"), "invalid JSON").expect("failed discovery");
++    assert!(app.delivery.refresh_agents(false).is_err());
++    assert!(!app.delivery.can_send(), "discovery failure clears selection");
++    std::fs::remove_dir_all(root).expect("cleanup");
++}
+diff --git a/crates/plannotator-tui/src/app/draw.rs b/crates/plannotator-tui/src/app/draw.rs
+index 6bb4173..862b1ad 100644
+--- a/crates/plannotator-tui/src/app/draw.rs
++++ b/crates/plannotator-tui/src/app/draw.rs
+@@ -89,6 +89,7 @@ impl App {
+             Mode::Edit(_) => self.draw_compose(frame, &self.compose_title("edit")),
+             Mode::Browse if self.pending.is_some() => self.draw_toolbar(frame),
+             Mode::Pick => self.draw_pick(frame),
++            Mode::Agents => self.draw_agents(frame),
+             Mode::Archive => self.draw_archive(frame),
+             Mode::ReviewMenu => self.draw_review_menu(frame),
+             Mode::Browse | Mode::ConfirmQuit => {}
+diff --git a/crates/plannotator-tui/src/app/header.rs b/crates/plannotator-tui/src/app/header.rs
+index e8322e2..9bd8186 100644
+--- a/crates/plannotator-tui/src/app/header.rs
++++ b/crates/plannotator-tui/src/app/header.rs
+@@ -22,6 +22,7 @@ pub(super) const REVIEW_LABEL: &str = "Review \u{25be} (m)";
+ #[derive(Debug, Clone, Copy)]
+ enum Button {
+     Send,
++    Agents,
+     Review,
+ }
+ 
+@@ -33,6 +34,11 @@ impl App {
+             return Vec::new();
+         }
+         let mut labels = vec![(Button::Send, self.send_label())];
++        if self.delivery.agent_choices().is_some() {
++            let label =
++                if self.delivery.can_send() { self.delivery.describe() } else { "Select agent".into() };
++            labels.push((Button::Agents, format!("{} ▾ (A)", label.chars().take(40).collect::<String>())));
++        }
+         if self.is_file_review() {
+             labels.push((Button::Review, REVIEW_LABEL.to_owned()));
+         }
+@@ -70,6 +76,10 @@ impl App {
+                     self.geometry.send_button = Some(rect);
+                     self.button_style()
+                 }
++                Button::Agents => {
++                    self.geometry.agents_button = Some(rect);
++                    Style::new().fg(Color::Cyan).bg(palette().toolbar_bg)
++                }
+                 Button::Review => {
+                     self.geometry.review_button = Some(rect);
+                     Style::new().fg(Color::Cyan).bg(palette().toolbar_bg)
+@@ -81,6 +91,9 @@ impl App {
+ 
+     /// At zero the button is still drawn and clickable; it reports the no-op in the footer.
+     fn button_style(&self) -> Style {
++        if !self.delivery.can_send() {
++            return Style::new().fg(palette().idle_fg).bg(palette().toolbar_bg).add_modifier(Modifier::DIM);
++        }
+         match &self.send_state {
+             SendState::Ready if self.send_count() == 0 => {
+                 Style::new().fg(palette().idle_fg).bg(palette().toolbar_bg).add_modifier(Modifier::DIM)
+diff --git a/crates/plannotator-tui/src/app/input.rs b/crates/plannotator-tui/src/app/input.rs
+index 12fb3fe..43fb5a8 100644
+--- a/crates/plannotator-tui/src/app/input.rs
++++ b/crates/plannotator-tui/src/app/input.rs
+@@ -20,6 +20,10 @@ impl App {
+                 Mode::Browse => self.browse_key(*key),
+                 Mode::ConfirmQuit => self.confirm_quit_key(*key),
+                 Mode::Pick => self.pick_key(*key),
++                Mode::Agents => {
++                    self.agents_key(*key);
++                    Ok(())
++                }
+                 Mode::Archive => {
+                     self.archive_key(*key);
+                     Ok(())
+@@ -35,6 +39,10 @@ impl App {
+             }
+             Event::Mouse(mouse) if self.mode == Mode::Browse => self.mouse(*mouse),
+             Event::Mouse(mouse) if self.mode == Mode::Pick => self.pick_mouse(*mouse),
++            Event::Mouse(mouse) if self.mode == Mode::Agents => {
++                self.agents_mouse(*mouse);
++                Ok(())
++            }
+             Event::Mouse(mouse) if self.mode == Mode::ReviewMenu => self.menu_mouse(*mouse),
+             Event::Mouse(mouse) if self.mode == Mode::Archive => {
+                 self.archive_mouse(*mouse);
+@@ -55,6 +63,10 @@ impl App {
+                 self.cycle_focus();
+                 return Ok(());
+             }
++            (KeyCode::Char('A'), _) if self.delivery.agent_choices().is_some() => {
++                self.open_agents();
++                return Ok(());
++            }
+             (KeyCode::Char('E'), _) => return self.send_feedback(),
+             // A reply review sends every note, so one the agent already has closes like `q`.
+             (KeyCode::Char('S'), _) if !self.is_file_review() => {
+@@ -347,7 +359,8 @@ impl App {
+                     | Mode::ConfirmQuit
+                     | Mode::Pick
+                     | Mode::Archive
+-                    | Mode::ReviewMenu => {
++                    | Mode::ReviewMenu
++                    | Mode::Agents => {
+                         if !body.is_empty()
+                             && let Some(pending) = self.pending.take()
+                         {
+@@ -376,6 +389,10 @@ impl App {
+                 let hit = |rect: Option<ratatui::layout::Rect>| {
+                     rect.is_some_and(|r| mouse.row == r.y && mouse.column >= r.x && mouse.column < r.right())
+                 };
++                if hit(self.geometry.agents_button) {
++                    self.open_agents();
++                    return Ok(());
++                }
+                 if hit(self.geometry.review_button) {
+                     self.open_review_menu();
+                     return Ok(());
+diff --git a/crates/plannotator-tui/src/app/mod.rs b/crates/plannotator-tui/src/app/mod.rs
+index 7115697..d284dc5 100644
+--- a/crates/plannotator-tui/src/app/mod.rs
++++ b/crates/plannotator-tui/src/app/mod.rs
+@@ -1,6 +1,9 @@
+ //! Application state. Input handling lives in `input`, drawing in `draw`; this module owns
+ //! the data they share and the operations that change it.
+ 
++mod agents;
++#[cfg(test)]
++mod agents_tests;
+ mod archive_view;
+ mod compose;
+ mod draw;
+@@ -60,6 +63,7 @@ enum Mode {
+     Archive,
+     /// The header's Review menu is open over a file or folder review.
+     ReviewMenu,
++    Agents,
+ }
+ 
+ /// Which pane keyboard input goes to.
+@@ -81,6 +85,9 @@ struct Geometry {
+     bubbles: Vec<(Rect, String)>,
+     /// The header's Send button; `None` when the header was too narrow for it.
+     send_button: Option<Rect>,
++    agents_button: Option<Rect>,
++    agents_menu: Option<Rect>,
++    agents_rows: Vec<(Rect, usize)>,
+     /// The header's Review button; only file and folder reviews draw it.
+     review_button: Option<Rect>,
+     undo_button: Option<Rect>,
+@@ -139,6 +146,7 @@ pub(crate) struct App {
+     /// `t` toggles; `None` means "automatic by width".
+     tree_visible: Option<bool>,
+     delivery: Box<dyn Delivery>,
++    agents_cursor: usize,
+     send_state: SendState,
+     folder_counts: HashMap<PathBuf, feedback::ReviewCounts>,
+     /// Annotated files the folder counts could not read, in `review_files` order.
+@@ -205,7 +213,11 @@ impl std::fmt::Debug for App {
+ }
+ 
+ impl App {
+-    pub(crate) fn open(source: DocumentSource, width: usize, delivery: Box<dyn Delivery>) -> Result<Self> {
++    pub(crate) fn open(
++        source: DocumentSource,
++        width: usize,
++        mut delivery: Box<dyn Delivery>,
++    ) -> Result<Self> {
+         let data_dir = workspace_paths::data_dir();
+         let folder = match &source.provenance {
+             Provenance::File { path } => path.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf),
+@@ -214,6 +226,8 @@ impl App {
+         let project = workspace_paths::project_name(&folder);
+         let open = Open::new(source, width, &data_dir, &project)?;
+         let send_state = if open.store.all_delivered() { SendState::Sent } else { SendState::Ready };
++        let discovery_error =
++            delivery.refresh_agents(true).err().map(|e| format!("cannot list agents: {e:#}"));
+         Ok(Self {
+             open,
+             data_dir,
+@@ -223,6 +237,7 @@ impl App {
+             tree_scroll: 0,
+             tree_visible: None,
+             delivery,
++            agents_cursor: 0,
+             send_state,
+             folder_counts: HashMap::new(),
+             unreadable_files: Vec::new(),
+@@ -253,7 +268,7 @@ impl App {
+             shift_enter: false,
+             last_click: None,
+             geometry: Geometry::default(),
+-            status: None,
++            status: discovery_error,
+             frame_ms: 0.0,
+             frame_max_ms: 0.0,
+             clipboard: false,
+diff --git a/crates/plannotator-tui/src/app/send.rs b/crates/plannotator-tui/src/app/send.rs
+index 9aff59e..991de44 100644
+--- a/crates/plannotator-tui/src/app/send.rs
++++ b/crates/plannotator-tui/src/app/send.rs
+@@ -31,6 +31,14 @@ impl App {
+     }
+ 
+     fn send_feedback_scope(&mut self, scope: SendScope) -> Result<()> {
++        if let Err(err) = self.delivery.refresh_agents(false) {
++            self.status = Some(format!("cannot list agents: {err:#}"));
++            return Ok(());
++        }
++        if !self.delivery.can_send() {
++            self.status = Some("select an agent before sending · A choose agent".into());
++            return Ok(());
++        }
+         let mut feedback = self.prepare_feedback(scope)?;
+         if self.tree.is_some() {
+             self.folder_counts = std::mem::take(&mut feedback.counts);
+@@ -187,8 +195,14 @@ impl App {
+     }
+ 
+     pub(super) fn send_label(&self) -> String {
++        if !self.delivery.can_send() {
++            return "Send · select agent first".into();
++        }
+         let target = self.delivery.describe();
+         let count = self.send_count();
++        if self.delivery.agent_choices().is_some() {
++            return format!("Send {count} (E)");
++        }
+         if self.is_file_review() {
+             let verb = if self.delivery.is_agent() { "Send" } else { "Copy" };
+             let across = if self.tree.is_some() {
+@@ -230,6 +244,10 @@ impl App {
+     /// Send, then quit unless something is still unsent. A refused send keeps the app open
+     /// so the footer can say why; an empty review or a clipboard copy has nothing to wait for.
+     pub(super) fn send_and_quit(&mut self) -> Result<()> {
++        if !self.delivery.can_send() {
++            self.status = Some("select an agent before sending · A choose agent".into());
++            return Ok(());
++        }
+         self.send_feedback()?;
+         self.quit = !self.has_unsent();
+         Ok(())
+diff --git a/crates/plannotator-tui/src/app/tests.rs b/crates/plannotator-tui/src/app/tests.rs
+index 49449f9..20d92d7 100644
+--- a/crates/plannotator-tui/src/app/tests.rs
++++ b/crates/plannotator-tui/src/app/tests.rs
+@@ -112,7 +112,7 @@ fn the_header_draws_the_send_button_and_records_where_it_is() {
+     app.add_block_annotation(0, Kind::Comment, "x".to_owned()).expect("annotation");
+     let rows = draw(&mut app);
+     let header = row(&rows, 0);
+-    assert!(header.contains("Send 1 to claude in w1:p1 ▸"), "header was {header:?}");
++    assert!(header.contains("Send · select agent first"), "header was {header:?}");
+     let rect = app.geometry.send_button.expect("button rect recorded");
+     assert_eq!(rect.y, 0);
+     assert_eq!(rect.right(), 80, "the button sits on the right edge");
+diff --git a/crates/plannotator-tui/src/cli.rs b/crates/plannotator-tui/src/cli.rs
+index e4c3e78..5b97b02 100644
+--- a/crates/plannotator-tui/src/cli.rs
++++ b/crates/plannotator-tui/src/cli.rs
+@@ -63,6 +63,7 @@ pub(crate) fn delivery(interactive: bool) -> Box<dyn Delivery> {
+             let agent = target.agent.or_else(|| env.agent_in_pane(&target.pane));
+             Box::new(HerdrAgent::new(env.bin, target.pane, agent))
+         }
++        _ if env.in_herdr => Box::new(HerdrAgent::new(env.bin, String::new(), None)),
+         _ => Box::new(Clipboard),
+     }
+ }
+diff --git a/crates/plannotator-tui/src/delivery.rs b/crates/plannotator-tui/src/delivery.rs
+index 3ea5694..eef27bf 100644
+--- a/crates/plannotator-tui/src/delivery.rs
++++ b/crates/plannotator-tui/src/delivery.rs
+@@ -35,7 +35,28 @@ impl From<std::io::Error> for DeliveryError {
+     }
+ }
+ 
++#[derive(Debug, Clone)]
++pub(crate) struct AgentChoice {
++    pub(crate) pane: String,
++    pub(crate) agent: String,
++    pub(crate) label: String,
++}
++
+ pub(crate) trait Delivery {
++    fn refresh_agents(&mut self, _initial: bool) -> anyhow::Result<()> {
++        Ok(())
++    }
++    fn agent_choices(&self) -> Option<&[AgentChoice]> {
++        None
++    }
++    fn selected_pane(&self) -> Option<&str> {
++        None
++    }
++    fn select_agent(&mut self, _pane: Option<String>) {}
++    fn can_send(&self) -> bool {
++        true
++    }
++
+     /// Shown in the footer and on the button, e.g. `clipboard` or `claude in w1:p1`.
+     fn describe(&self) -> String;
+     /// True when the target is an agent that will act on the feedback.
+@@ -98,20 +119,70 @@ pub(crate) struct HerdrAgent {
+     bin: PathBuf,
+     pane: String,
+     agent: Option<String>,
++    choices: Vec<AgentChoice>,
++    selected: Option<String>,
+ }
+ 
+ impl HerdrAgent {
+     pub(crate) fn new(bin: PathBuf, pane: String, agent: Option<String>) -> Self {
+-        Self { bin, pane, agent }
++        Self { selected: Some(pane.clone()), bin, pane, agent, choices: Vec::new() }
+     }
+ }
+ 
+ impl Delivery for HerdrAgent {
++    fn refresh_agents(&mut self, initial: bool) -> anyhow::Result<()> {
++        // Clear stale identities before querying. A failed refresh must never retain a target.
++        let previous = self.selected.take();
++        self.choices.clear();
++        let query = |args: &[&str]| -> anyhow::Result<serde_json::Value> {
++            let output = Command::new(&self.bin).args(args).stdin(Stdio::null()).output()?;
++            anyhow::ensure!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
++            Ok(serde_json::from_slice(&output.stdout)?)
++        };
++        let agents = query(&["agent", "list"])?;
++        let tabs = query(&["tab", "list"])?;
++        self.choices = super::agent_choices::parse(&agents, &tabs)?;
++        self.selected = if initial {
++            // With several candidates even the invoking agent requires explicit selection.
++            (self.choices.len() == 1).then(|| self.choices.first().map(|c| c.pane.clone())).flatten()
++        } else {
++            previous.filter(|pane| self.choices.iter().any(|c| &c.pane == pane))
++        };
++        let selected = self.selected.clone();
++        self.select_agent(selected);
++        Ok(())
++    }
++
++    fn agent_choices(&self) -> Option<&[AgentChoice]> {
++        Some(&self.choices)
++    }
++    fn selected_pane(&self) -> Option<&str> {
++        self.selected.as_deref()
++    }
++    fn can_send(&self) -> bool {
++        self.selected.is_some()
++    }
++    fn select_agent(&mut self, pane: Option<String>) {
++        self.selected = pane.filter(|p| self.choices.iter().any(|c| &c.pane == p));
++        if let Some(choice) = self.choices.iter().find(|c| Some(c.pane.as_str()) == self.selected.as_deref())
++        {
++            self.pane.clone_from(&choice.pane);
++            self.agent = Some(choice.agent.clone());
++        }
++    }
++
+     fn agent_host(&self) -> Option<&str> {
+         self.agent.as_deref()
+     }
+ 
+     fn describe(&self) -> String {
++        if self.selected.is_none() {
++            return "Select agent".to_owned();
++        }
++        if let Some(choice) = self.choices.iter().find(|c| Some(c.pane.as_str()) == self.selected.as_deref())
++        {
++            return choice.label.clone();
++        }
+         match &self.agent {
+             Some(agent) => format!("{agent} in {}", self.pane),
+             None => self.pane.clone(),
+@@ -123,6 +194,9 @@ impl Delivery for HerdrAgent {
+     }
+ 
+     fn deliver(&self, feedback: &str) -> Result<(), DeliveryError> {
++        if !self.can_send() {
++            return Err(DeliveryError::Unavailable("select an agent first".into()));
++        }
+         let output = Command::new(&self.bin)
+             .args(["agent", "prompt", &self.pane, feedback])
+             .stdin(Stdio::null())
+diff --git a/crates/plannotator-tui/src/main.rs b/crates/plannotator-tui/src/main.rs
+index b08126f..5d2c846 100644
+--- a/crates/plannotator-tui/src/main.rs
++++ b/crates/plannotator-tui/src/main.rs
+@@ -1,5 +1,6 @@
+ //! plannotator-tui: annotate Markdown in the terminal.
+ 
++mod agent_choices;
+ mod app;
+ mod archive;
+ mod base64;

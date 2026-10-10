@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
-repository = "https://github.com/plannotator/herdr-annotate"
+repository = "https://github.com/yinyajiang/herdr-annotate"
 description = "Native Herdr Annotate Lite runtime."
 publish = false
 

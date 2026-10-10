@@ -144,7 +144,7 @@ try {
   $base = if (-not [string]::IsNullOrWhiteSpace($releaseBaseOverride)) {
     $releaseBaseOverride.TrimEnd([char]"/")
   } else {
-    "https://github.com/plannotator/plannotator-tui/releases/download/v$version"
+    "https://github.com/yinyajiang/herdr-annotate/releases/download/tui-v$version"
   }
 
   $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("plannotator-tui-" + [guid]::NewGuid())

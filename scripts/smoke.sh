@@ -13,7 +13,7 @@ set -euo pipefail
 [ -n "${HERDR_SESSION:-}" ] || { echo "set HERDR_SESSION to a disposable named session" >&2; exit 2; }
 [ "$HERDR_SESSION" != default ] || { echo "refusing to run against the default session" >&2; exit 2; }
 old_ref="${1:-ed8593f639778644c64251979b3ecc165c0f8127}"   # the first shipped full manifest (plannotator-tui 0.3.0 pin)
-spec=plannotator/herdr-annotate
+spec=yinyajiang/herdr-annotate
 
 plugin_json() { herdr plugin list --json | python3 -c "
 import json,sys

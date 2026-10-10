@@ -6,7 +6,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -x "$root/bin/plannotator-tui.exe" ]; then
   exec "$root/bin/plannotator-tui.exe" "$@"
 fi
-msg="plannotator-tui is not installed. Reinstall the plugin: herdr plugin install plannotator/herdr-annotate"
+msg="plannotator-tui is not installed. Reinstall the plugin: herdr plugin install yinyajiang/herdr-annotate"
 echo "$msg" >&2
 if [ -n "${HERDR_BIN_PATH:-}" ]; then
   "$HERDR_BIN_PATH" notification show "Annotate: review pane unavailable" --body "$msg" >/dev/null 2>&1 || true

@@ -4,3 +4,4 @@ bin/*
 windows-full/bin/*
 !windows-full/bin/.gitkeep
 /rust/target/
+/.build/

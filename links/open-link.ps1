@@ -11,7 +11,7 @@
 $ErrorActionPreference = "Continue"
 
 $herdr = if ([string]::IsNullOrEmpty($env:HERDR_BIN_PATH)) { "herdr" } else { $env:HERDR_BIN_PATH }
-$installHint = "herdr plugin install plannotator/herdr-annotate/windows-full"
+$installHint = "herdr plugin install yinyajiang/herdr-annotate/windows-full"
 
 function Fail {
   param([string]$Title, [string]$Body)

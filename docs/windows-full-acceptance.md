@@ -211,7 +211,7 @@ for its specific assertions; it does not qualify the complete user experience.
 - [ ] After the subdirectory is available, test this public command verbatim:
 
   ```text
-  herdr plugin install plannotator/herdr-annotate/windows-full
+  herdr plugin install yinyajiang/herdr-annotate/windows-full
   ```
 
   For review CI, add `--ref <FULL_REVIEWED_COMMIT_SHA> --yes`, replacing the
@@ -226,7 +226,7 @@ for its specific assertions; it does not qualify the complete user experience.
   > Windows PowerShell. Install it with:
 
   ```text
-  herdr plugin install plannotator/herdr-annotate/windows-full
+  herdr plugin install yinyajiang/herdr-annotate/windows-full
   ```
 
   > The installer downloads the pinned native Windows TUI and verifies its
@@ -250,13 +250,13 @@ for its specific assertions; it does not qualify the complete user experience.
   > For Windows on Herdr 0.8.x, install Lite:
 
   ```text
-  herdr plugin install plannotator/herdr-annotate/lite
+  herdr plugin install yinyajiang/herdr-annotate/lite
   ```
 
   > For Full on macOS or Linux, keep using:
 
   ```text
-  herdr plugin install plannotator/herdr-annotate
+  herdr plugin install yinyajiang/herdr-annotate
   ```
 
   The acceptance-results link must resolve to a published report in the repo or

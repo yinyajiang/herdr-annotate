@@ -8,7 +8,7 @@
 set -euo pipefail
 
 herdr_bin="${HERDR_BIN_PATH:-herdr}"
-install_hint="herdr plugin install plannotator/herdr-annotate"
+install_hint="herdr plugin install yinyajiang/herdr-annotate"
 
 fail() {
   echo "$2" >&2

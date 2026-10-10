@@ -1,5 +1,5 @@
 # Herdr Annotate, lite: the terminal annotation tools only, no plannotator-tui binary download.
-# Install with: herdr plugin install plannotator/herdr-annotate/lite
+# Install with: herdr plugin install yinyajiang/herdr-annotate/lite
 # The full plugin at the repository root adds document review with plannotator-tui.
 #
 # The build hook and every command reach one directory up, so the Lite variant shares the
@@ -8,7 +8,7 @@
 
 id = "annotate"
 name = "Annotate"
-version = "0.9.0"
+version = "0.9.1"
 min_herdr_version = "0.8.0"
 description = "Comment on terminal selections and copy annotations as agent context."
 platforms = ["linux", "macos", "windows"]

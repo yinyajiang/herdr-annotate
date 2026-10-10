@@ -1,5 +1,5 @@
 # Herdr Annotate, Windows Full: the terminal annotation tools plus document review.
-# Install with: herdr plugin install plannotator/herdr-annotate/windows-full
+# Install with: herdr plugin install yinyajiang/herdr-annotate/windows-full
 # The repository root keeps the macOS/Linux Full plugin; lite/ keeps the terminal-only
 # variant, which is what Windows on Herdr 0.8.x should install.
 #
@@ -21,7 +21,7 @@
 
 id = "annotate"
 name = "Annotate"
-version = "0.9.0"
+version = "0.9.1"
 min_herdr_version = "0.9.0"
 description = "Comment on terminal selections and copy annotations as agent context."
 platforms = ["windows"]
